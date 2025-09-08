@@ -58,13 +58,153 @@
 #define HR_SMOOTH_N 5
 #define MA_N 100
 
+// BMI160 =================
+#define BMI160_INT1_PIN             GPIO_NUM_4
+
+// BMI160 센서 설정
+#define BMI160_I2C_ADDR             0x68      
+#define BMI160_REG_CHIP_ID          0x00
+#define BMI160_REG_ACC_CONF_ADDR    0x40
+#define BMI160_REG_ACC_CONF         0x2C
+#define BMI160_REG_ACC_RANGE_ADDR   0x41
+#define BMI160_REG_ACC_RANGE        0x08
+#define BMI160_REG_GYR_CONF_ADDR    0x42
+#define BMI160_REG_GYR_CONF         0x2D
+#define BMI160_REG_GYR_RANGE_ADDR   0x43
+#define BMI160_REG_GYR_RANGE        0x00
+#define BMI160_REG_CMD              0x7E
+#define BMI160_REG_PMU_STATUS       0x03
+#define BMI160_REG_GYR_X_L          0x0C      /
+#define BMI160_REG_ACC_X_L          0x12      
+
+// BMI INT 레지스터
+
+#define BMI160_REG_INT_en1          0x51 // LOW_G
+#define BMI160_REG_INT_LOWHIGH_dur  0x5A //20ms
+#define BMI160_REG_INT_LOWHIGH_th   0x5B //0.4g
+#define BMI160_REG_INT_OUT_CTRL     0x53 //active low , push-pull
+#define BMI160_REG_INT_MAP          0x55 //INT1 enalbe 
+#define BMI160_REG_INT_STATUS_0     0x1E
+
+// BMI160 명령어
+#define BMI160_CMD_SOFT_RESET       0xB6
+#define BMI160_CMD_ACC_MODE_NORMAL  0x11
+#define BMI160_CMD_GYR_MODE_NORMAL  0x15
+
+// 변환 계수 (기본 설정: Accel ±8g, Gyro ±2000 dps)
+#define ACCEL_SENSITIVITY           4096.0f
+#define GYRO_SENSITIVITY            16.384f   // 32768 / 2000dps
+
+
+
 // AHT21B Sensor Address and Commands
-#define AHT21B_ADDR 0x38             // 디바이스 주소
-#define AHT21B_CMD_GET_STATUS 0x71   // 상태 워드 읽기 명령어
-#define AHT21B_CMD_TRIGGER_MEAS 0xAC // 측정 트리거 명령어
+#define AHT21B_ADDR 0x38             
+#define AHT21B_CMD_GET_STATUS 0x71   
+#define AHT21B_CMD_TRIGGER_MEAS 0xAC 
 #define AHT21B_CMD_PARAM_BYTE1 0x33
 #define AHT21B_CMD_PARAM_BYTE2 0x00
 
+
+// ======================= databuffer ===============================
+struct SensorDataBuffer {
+    float bpm = 0.0f;
+    float temperature = -99.0f;
+    float humidity = -99.0f;
+    float voltage_percent = 0.0f;
+    bool  fall_detected = false;
+    char status[8] = "OFF";
+    uint32_t timestamp_ms = 0;
+};
+
+
+static SensorDataBuffer g_sensor_data;
+static SemaphoreHandle_t g_data_mutex;
+
+static esp_err_t bmi160_write_reg(uint8_t reg_addr, uint8_t data) {
+    uint8_t write_buf[2] = { reg_addr, data }; // [0]는 주소, [1]은 데이터
+    esp_err_t ret = i2c_master_write_to_device(I2C_NUM, BMI160_I2C_ADDR, write_buf, sizeof(write_buf), pdMS_TO_TICKS(1000));
+    return ret;
+}
+static esp_err_t bmi160_read_reg(uint8_t reg_addr, uint8_t* data, size_t len) {
+    return i2c_master_write_read_device(I2C_NUM, BMI160_I2C_ADDR, &reg_addr, 1, data, len, pdMS_TO_TICKS(1000));
+}
+static esp_err_t bmi160_init() {
+    uint8_t chip_id = 0;
+    esp_err_t ret = bmi160_read_reg(BMI160_REG_CHIP_ID, &chip_id, 1);
+    if (ret != ESP_OK || chip_id != 0xD1) {
+        ESP_LOGE(TAG, "BMI160 not found or wrong chip ID: 0x%02X", chip_id);
+        return ESP_FAIL;
+    }
+    ESP_LOGI(TAG, "BMI160 found with chip ID: 0x%02X", chip_id);
+
+    ESP_LOGI(TAG, "Performing soft reset...");
+    ret = bmi160_write_reg(BMI160_REG_CMD, BMI160_CMD_SOFT_RESET);
+    if (ret != ESP_OK) { ESP_LOGE(TAG, "Soft reset command failed!"); return ESP_FAIL; }
+    vTaskDelay(pdMS_TO_TICKS(250));
+
+    ESP_LOGI(TAG, "Setting accelerometer to configuration...");
+    ret = bmi160_write_reg(BMI160_REG_ACC_CONF_ADDR, BMI160_REG_ACC_CONF);
+    if (ret != ESP_OK) { ESP_LOGE(TAG, "Set Accel Normal mode command failed!"); return ESP_FAIL; }
+    vTaskDelay(pdMS_TO_TICKS(250));
+
+    ESP_LOGI(TAG, "Setting accelerometer RANGE...");
+    ret = bmi160_write_reg(BMI160_REG_ACC_RANGE_ADDR, BMI160_REG_ACC_RANGE);
+    if (ret != ESP_OK) { ESP_LOGE(TAG, "Set Accel Normal mode command failed!"); return ESP_FAIL; }
+    vTaskDelay(pdMS_TO_TICKS(250));
+
+    ESP_LOGI(TAG, "Setting accelerometer treshold 0.4g");
+    ret = bmi160_write_reg(BMI160_REG_INT_LOWHIGH_th, 0x33);
+    if (ret != ESP_OK) { ESP_LOGE(TAG, "Set Accel Normal mode command failed!"); return ESP_FAIL; }
+    vTaskDelay(pdMS_TO_TICKS(250));
+
+    ESP_LOGI(TAG, "Setting accelerometer duration 20ms");
+    ret = bmi160_write_reg(BMI160_REG_INT_LOWHIGH_dur, 0x07);
+    if (ret != ESP_OK) { ESP_LOGE(TAG, "Set Accel Normal mode command failed!"); return ESP_FAIL; }
+    vTaskDelay(pdMS_TO_TICKS(250));
+
+    ESP_LOGI(TAG, "Setting accelerometer INT enable");
+    ret = bmi160_write_reg(BMI160_REG_INT_en1, 0x08);
+    if (ret != ESP_OK) { ESP_LOGE(TAG, "Set Accel Normal mode command failed!"); return ESP_FAIL; }
+    vTaskDelay(pdMS_TO_TICKS(250));
+
+    ESP_LOGI(TAG, "Setting accelerometer MAPPING INT1 pin");
+    ret = bmi160_write_reg(BMI160_REG_INT_MAP, 0x01);
+    if (ret != ESP_OK) { ESP_LOGE(TAG, "Set Accel Normal mode command failed!"); return ESP_FAIL; }
+    vTaskDelay(pdMS_TO_TICKS(250));
+
+    ESP_LOGI(TAG, "Setting INT1 pin Active low , push pull");
+    ret = bmi160_write_reg(BMI160_REG_INT_OUT_CTRL, 0x08);
+    if (ret != ESP_OK) { ESP_LOGE(TAG, "Set Accel Normal mode command failed!"); return ESP_FAIL; }
+    vTaskDelay(pdMS_TO_TICKS(250));
+
+    ESP_LOGI(TAG, "Setting accelerometer to Normal mode...");
+    ret = bmi160_write_reg(BMI160_REG_CMD, BMI160_CMD_ACC_MODE_NORMAL);
+    if (ret != ESP_OK) { ESP_LOGE(TAG, "Set Accel Normal mode command failed!"); return ESP_FAIL; }
+    vTaskDelay(pdMS_TO_TICKS(250));
+
+    ESP_LOGI(TAG, "Setting gyroscope to Normal mode...");
+    ret = bmi160_write_reg(BMI160_REG_CMD, BMI160_CMD_GYR_MODE_NORMAL);
+    if (ret != ESP_OK) { ESP_LOGE(TAG, "Set Gyro Normal mode command failed!"); return ESP_FAIL; }
+    vTaskDelay(pdMS_TO_TICKS(250));
+
+    // --- 상태 검증 로그 추가 ---
+    uint8_t pmu_status = 0;
+    bmi160_read_reg(BMI160_REG_PMU_STATUS, &pmu_status, 1);
+    ESP_LOGI(TAG, "PMU_STATUS Register (0x03): 0x%02X", pmu_status);
+    if (pmu_status < 0x14) {
+        ESP_LOGW(TAG, "Warning: PMU status indicates sensors are not in normal mode.");
+    }
+    else {
+        ESP_LOGI(TAG, "PMU status indicates sensors are powered up correctly.");
+    }
+    // -------------------------
+
+    ESP_LOGI(TAG, "BMI160 initialized successfully");
+    return ESP_OK;
+}
+
+
+//====================
 static const float a_bp[9] = {1.0f, -1.5610180758007182f, 0.6413515380575631f};
 static const float b_bp[9] = {0.020083365564211235f, 0.0f,
                               -0.020083365564211235f};
@@ -87,10 +227,10 @@ static uint32_t sample_idx = 0;
 static std::function<void(float, const char *, uint32_t)> g_emit_bpm;
 // ========= AHT21B Sensor Functions (added) =========
 static bool aht21b_check_and_init() {
-  vTaskDelay(pdMS_TO_TICKS(100)); // Power-on delay
+  vTaskDelay(pdMS_TO_TICKS(100)); 
   uint8_t status;
   const uint8_t cmd_buf[] = {0x71};
-  // i2c_master_write_read_device is more efficient for this
+ 
   esp_err_t err =
       i2c_master_write_read_device(I2C_NUM, AHT21B_ADDR, cmd_buf, 1, &status, 1,
                                    pdMS_TO_TICKS(I2C_TIMEOUT_MS));
@@ -115,13 +255,13 @@ static bool read_aht21b_data(float &temperature, float &humidity) {
   if (err != ESP_OK)
     return false;
 
-  vTaskDelay(pdMS_TO_TICKS(100)); // Wait for measurement
+  vTaskDelay(pdMS_TO_TICKS(100)); 
 
   uint8_t read_buf[7] = {0};
   err = i2c_master_read_from_device(I2C_NUM, AHT21B_ADDR, read_buf,
                                     sizeof(read_buf),
                                     pdMS_TO_TICKS(I2C_TIMEOUT_MS));
-  if (err != ESP_OK || (read_buf[0] & 0x80)) { // Check for error or busy flag
+  if (err != ESP_OK || (read_buf[0] & 0x80)) { 
     return false;
   }
 
@@ -140,7 +280,7 @@ static bool read_aht21b_data(float &temperature, float &humidity) {
 #include "esp_adc/adc_cali_scheme.h"
 #include "esp_adc/adc_oneshot.h"
 
-static constexpr int BAT_ADC_GPIO = 0; // same as TARGET_GPIO
+static constexpr int BAT_ADC_GPIO = 0; 
 static constexpr auto BAT_USE_ATTEN = ADC_ATTEN_DB_2_5;
 static constexpr int BAT_ADC_SAMPLES = 32;
 static constexpr float R1_OHMS = 30000.0f;
@@ -437,46 +577,123 @@ static void int_task(void *arg) {
   uint32_t io_num;
   uint32_t ir_buf[BURST_SZ];
   const float Ts_ms = 1000.0f / SR_HZ;
+
+  uint8_t int_status_buffer[5];
+
+
   while (1) {
-    if (!xQueueReceive(s_int_queue, &io_num, portMAX_DELAY))
-      continue;
-    uint8_t int1 = 0, int2 = 0;
-    if (read_regs(REG_INTR_STATUS_1, &int1, 1) != ESP_OK ||
-        read_regs(REG_INTR_STATUS_2, &int2, 1) != ESP_OK) {
-      ESP_LOGE(TAG, "INT_STATUS read fail");
-      continue;
-    }
-    int cnt = fifo_count_debug();
-    if (cnt <= 0)
-      continue;
-    int left = cnt;
-    while (left > 0) {
-      int n = (left >= BURST_SZ) ? BURST_SZ : left;
-      if (fifo_read_n_ir(n, ir_buf) != ESP_OK) {
-        ESP_LOGE(TAG, "fifo_read_n_ir fail");
-        break;
+      if (!xQueueReceive(s_int_queue, &io_num, portMAX_DELAY)) continue;
+
+      switch (io_num) {
+      case MAX30102_INT_GPIO: {
+          
+          uint8_t int1 = 0, int2 = 0;
+          if (read_regs(REG_INTR_STATUS_1, &int1, 1) != ESP_OK ||
+              read_regs(REG_INTR_STATUS_2, &int2, 1) != ESP_OK) {
+              ESP_LOGE(TAG, "INT_STATUS read fail");
+              continue;
+          }
+          int cnt = fifo_count_debug();
+          if (cnt <= 0) continue;
+          int left = cnt;
+          while (left > 0) {
+              int n = (left >= BURST_SZ) ? BURST_SZ : left;
+              if (fifo_read_n_ir(n, ir_buf) != ESP_OK) {
+                  ESP_LOGE(TAG, "fifo_read_n_ir fail");
+                  break;
+              }
+              for (int i = 0; i < n; i++) {
+                  float t_ms = (sample_idx * Ts_ms);
+                  process_sample(ir_buf[i], t_ms);
+                  sample_idx++;
+              }
+              left -= n;
+          }
+          break;
       }
-      for (int i = 0; i < n; i++) {
-        float t_ms = (sample_idx * Ts_ms);
-        process_sample(ir_buf[i], t_ms);
-        sample_idx++;
+
+      case BMI160_INT1_PIN: {
+          
+          gpio_intr_disable(BMI160_INT1_PIN);
+
+          
+          if (bmi160_read_reg(BMI160_REG_INT_STATUS_0, int_status_buffer, 4) != ESP_OK) {
+              ESP_LOGW(TAG, "BMI160 INT status read failed");
+              gpio_intr_enable(BMI160_INT1_PIN);
+              break;
+          }
+          ESP_LOGW(TAG, "INTERRUPT: Possible freefall detected! Checking...");
+
+          // 3) 임시 윈도우 폴링으로 충격/회전 확인 (최대 1초)
+          bool impact_detected = false;
+          bool rotation_detected = false;
+          TickType_t start_time = xTaskGetTickCount();
+          while ((xTaskGetTickCount() - start_time) < pdMS_TO_TICKS(1000)) {
+              uint8_t data[2];
+              if (bmi160_read_reg(BMI160_REG_GYR_X_L, data, 12) != ESP_OK) {
+                  ESP_LOGW(TAG, "BMI160 data read failed");
+                  vTaskDelay(pdMS_TO_TICKS(20));
+                  continue;
+              }
+              int16_t raw_ax = (int16_t)((data[7] << 8) | data[6]);
+              int16_t raw_ay = (int16_t)((data[9] << 8) | data[8]);
+              int16_t raw_az = (int16_t)((data[11] << 8) | data[10]);
+              int16_t raw_gx = (int16_t)((data[1] << 8) | data[0]);
+              int16_t raw_gy = (int16_t)((data[3] << 8) | data[2]);
+              int16_t raw_gz = (int16_t)((data[5] << 8) | data[4]);
+
+              float ax = raw_ax / ACCEL_SENSITIVITY;
+              float ay = raw_ay / ACCEL_SENSITIVITY;
+              float az = raw_az / ACCEL_SENSITIVITY;
+              float gx = raw_gx / GYRO_SENSITIVITY;
+              float gy = raw_gy / GYRO_SENSITIVITY;
+              float gz = raw_gz / GYRO_SENSITIVITY;
+
+              float SVM_A = sqrtf(ax * ax + ay * ay + az * az);
+              float SVM_G = sqrtf(gx * gx + gy * gy + gz * gz);
+
+              if (SVM_A > 1.0f)  impact_detected = true;   
+              if (SVM_G > 500.0f) rotation_detected = true;  
+
+              ESP_LOGW(TAG, "Checking... Accel: %.2f g, Gyro: %.2f dps", SVM_A, SVM_G);
+
+              if (impact_detected && rotation_detected) {
+                  ESP_LOGW(TAG, "Impact and rotation confirmed!");
+                  break;
+              }
+              vTaskDelay(pdMS_TO_TICKS(20));
+          }
+
+          
+          if (xSemaphoreTake(g_data_mutex, pdMS_TO_TICKS(50)) == pdTRUE) {
+              if (impact_detected && rotation_detected) {
+                  g_sensor_data.fall_detected = true;
+              }
+              //else {
+                  
+              //    g_sensor_data.fall_detected = false;
+             // }
+              xSemaphoreGive(g_data_mutex);
+          }
+
+          
+          xQueueReset(s_int_queue); 
+          gpio_intr_enable(BMI160_INT1_PIN);
+          ESP_LOGI(TAG, "System armed. Waiting for next interrupt...");
+          break;
       }
-      left -= n;
-    }
-  }
+
+      default:
+          
+          // ESP_LOGW(TAG, "Unknown GPIO INT: %u", (unsigned)io_num);
+          break;
+      } // switch
+  } // while
 }
 
-// ======================= databuffer ===============================
-struct SensorDataBuffer {
-    float bpm = 0.0f;
-    float temperature = -99.0f;
-    float humidity = -99.0f;
-    float voltage_percent = 0.0f;
-    char status[8] = "OFF";
-    uint32_t timestamp_ms = 0;
-};
-static SensorDataBuffer g_sensor_data;      
-static SemaphoreHandle_t g_data_mutex;
+
+
+
 void periodic_sender_task(void* pvParameters) {
     auto* device = static_cast<SolicareDevice*>(pvParameters);
     const TickType_t send_interval_ms = 2000; // 2초마다 데이터 전송
@@ -488,10 +705,13 @@ void periodic_sender_task(void* pvParameters) {
 
         SensorDataBuffer data_to_send;
 
-        // 뮤텍스로 전역 버퍼를 잠그고 안전하게 현재 데이터를 복사
+        
         if (xSemaphoreTake(g_data_mutex, pdMS_TO_TICKS(100)) == pdTRUE) {
-            data_to_send = g_sensor_data; // 조건 없이 현재 데이터를 복사
-            xSemaphoreGive(g_data_mutex); // 복사 후 즉시 잠금 해제
+            data_to_send = g_sensor_data; 
+            if (g_sensor_data.fall_detected) {
+                g_sensor_data.fall_detected = false;            
+            }
+            xSemaphoreGive(g_data_mutex); 
         }
         else {
             ESP_LOGW("SENDER_TASK", "Could not get mutex, skipping send cycle.");
@@ -506,6 +726,7 @@ void periodic_sender_task(void* pvParameters) {
             data_to_send.temperature,
             data_to_send.humidity,
             data_to_send.voltage_percent,
+            data_to_send.fall_detected,
             data_to_send.status,
             data_to_send.timestamp_ms
         );
@@ -514,7 +735,7 @@ void periodic_sender_task(void* pvParameters) {
 
 // ========= SolicareDevice changes: send JSON with voltage =========
 void SolicareDevice::send_bpm_json(float bpm, float temp, float hum,
-                                   float voltage, const char *status,
+                                   float voltage, bool fall_detected ,const char *status,
                                    uint32_t t_ms) {
   if (!socket_client_) {
     ESP_LOGW(TAG, "WebSocket client not ready");
@@ -527,14 +748,18 @@ void SolicareDevice::send_bpm_json(float bpm, float temp, float hum,
 
   char json[256];
 
-  int n = snprintf(
-      json, sizeof(json),
+  int n = snprintf(json, sizeof(json),
       "{\"device\":\"%s\",\"bpm\":%.1f,\"temperature\":%.2f,\"humidity\":%.2f,"
-      "\"voltage\":%.3f,\"timestamp_ms\":%u,\"status\":\"%s\"}",
-      config_.device_name.c_str(), bpm,
-      temp, // 온도 추가
-      hum,  // 습도 추가
-      voltage, (unsigned)t_ms, status);
+      "\"voltage\":%.3f,\"timestamp_ms\":%u,\"fall_detected\":%s,\"status\":\"%s\"}",
+      config_.device_name.c_str(),
+      bpm,                
+      temp,               
+      hum,                 
+      voltage,            
+      (unsigned)t_ms,     
+      fall_detected ? "true" : "false", 
+      status              
+  );
 
 
   if (n < 0 || n >= (int)sizeof(json)) {
@@ -589,6 +814,7 @@ extern "C" void app_main(void) {
   // 3. 센서 초기화
   aht21b_check_and_init(); // 온습도 센서 초기화 추가
   battery_adc_init_once(); // 배터리 ADC 초기화
+  bmi160_init();
 
   // 4. MAX30102 센서 설정 및 인터럽트 시작 (기존 i2c_init() 호출은 제거됨)
   vTaskDelay(pdMS_TO_TICKS(10));
@@ -611,11 +837,19 @@ extern "C" void app_main(void) {
   io_conf.intr_type = GPIO_INTR_NEGEDGE;
   ESP_ERROR_CHECK(gpio_config(&io_conf));
 
+  gpio_config_t io_conf1 = {};
+  io_conf1.intr_type = GPIO_INTR_NEGEDGE;
+  io_conf1.pin_bit_mask = (1ULL << BMI160_INT1_PIN);
+  io_conf1.mode = GPIO_MODE_INPUT;
+  io_conf1.pull_up_en = GPIO_PULLUP_ENABLE;
+  ESP_ERROR_CHECK(gpio_config(&io_conf1));
+
   s_int_queue = xQueueCreate(16, sizeof(uint32_t));
   xTaskCreate(int_task, "max30102_int_task", 4096, NULL, 10, NULL);
+
   gpio_install_isr_service(0);
   gpio_isr_handler_add(MAX30102_INT_GPIO, int_isr, (void *)MAX30102_INT_GPIO);
-
+  gpio_isr_handler_add(BMI160_INT1_PIN, int_isr, (void*)BMI160_INT1_PIN);
   ESP_LOGI(TAG, "MAX30102 sampler started. Waiting for interrupts...");
 
   while (1)
@@ -656,11 +890,11 @@ void SolicareDevice::run() {
   socket_client_->async_connect();
   socket_client_->start_sender_task();
 
-  // 콜백 함수 내부 로직이 수정되었습니다.
+  
   g_emit_bpm = [this](float bpm, const char *status, uint32_t t_ms) {
       if (xSemaphoreTake(g_data_mutex, portMAX_DELAY) == pdTRUE) {
 
-          // 다른 센서 값들을 읽어옴
+         
           read_aht21b_data(g_sensor_data.temperature, g_sensor_data.humidity);
 
 
@@ -680,12 +914,12 @@ void SolicareDevice::run() {
               if (corrected_bpm < 0) corrected_bpm = 0;
           }
 
-          // 전역 버퍼 값 업데이트
+         
           g_sensor_data.bpm = corrected_bpm;
           strncpy(g_sensor_data.status, status, sizeof(g_sensor_data.status) - 1);
           g_sensor_data.timestamp_ms = t_ms;
 
-          // 뮤텍스 잠금 해제
+         
           xSemaphoreGive(g_data_mutex);
       }
       };

@@ -18,10 +18,10 @@ extern "C" {
 // WiFi and Network Settings
 
 #define DEFAULT_WIFI_SSID "SOLICARE"
-#define DEFAULT_WIFI_PASSWORD "password123"
+#define DEFAULT_WIFI_PASSWORD "password1234"
 
-#define DEFAULT_SOCKET_SERVER_IP "192.168.137.1"
-#define DEFAULT_SOCKET_SERVER_PORT 3000
+#define DEFAULT_SOCKET_SERVER_IP "172.30.1.47"
+#define DEFAULT_SOCKET_SERVER_PORT 8080
 
 
 class SolicareDevice {
@@ -40,7 +40,7 @@ public:
           socket_server_port(DEFAULT_SOCKET_SERVER_PORT) {}
   };
 
-  void send_bpm_json(float bpm, float temp, float hum, float voltage,
+  void send_bpm_json(float bpm, float temp, float hum, float voltage,bool fall_detected,
                      const char *status, uint32_t t_ms);
 
   explicit SolicareDevice(const Config &config = Config{}) : config_(config) {}
