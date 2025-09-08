@@ -1,0 +1,40 @@
+# ESP-IDF Build Output #
+# ���� ������� �ҽ��ڵ尡 �ƴϹǷ� �ݵ�� �����մϴ�.
+/build/
+/out/
+
+# Managed Dependencies #
+# idf.py�� �ٿ�ε��ϴ� ������ ���̺귯���Դϴ�.
+/managed_components/
+
+# Configuration Backups #
+# menuconfig ���� �� �����Ǵ� ���� ��� �����Դϴ�.
+/sdkconfig.old
+/sdkconfig.bak
+
+# Common IDE and Editor Files #
+# �� �������� ���� ���� ȯ�� ������ �������� �ʽ��ϴ�.
+# Visual Studio Code
+.vscode/
+# Eclipse
+.project
+.cproject
+.settings/
+# JetBrains (CLion, etc.)
+.idea/
+
+# Other Editor/System Files #
+# Vim, Emacs ���� �ӽ� ���� �� �ý��� ���� �����Դϴ�.
+*.swp
+*~
+*.bak
+*.tmp
+
+# macOS
+.DS_Store
+
+# Windows
+Thumbs.db
+
+# Visual Studio temporary files
+.vs/
