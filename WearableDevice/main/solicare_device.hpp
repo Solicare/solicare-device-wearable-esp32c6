@@ -18,9 +18,9 @@ extern "C" {
 // WiFi and Network Settings
 
 #define DEFAULT_WIFI_SSID "SOLICARE"
-#define DEFAULT_WIFI_PASSWORD "password1234"
+#define DEFAULT_WIFI_PASSWORD "password123"
 
-#define DEFAULT_SOCKET_SERVER_IP "172.30.1.47"
+#define DEFAULT_SOCKET_SERVER_IP "192.168.137.4"
 #define DEFAULT_SOCKET_SERVER_PORT 8080
 
 

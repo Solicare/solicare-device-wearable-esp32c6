@@ -74,7 +74,7 @@
 #define BMI160_REG_GYR_RANGE        0x00
 #define BMI160_REG_CMD              0x7E
 #define BMI160_REG_PMU_STATUS       0x03
-#define BMI160_REG_GYR_X_L          0x0C      /
+#define BMI160_REG_GYR_X_L          0x0C      
 #define BMI160_REG_ACC_X_L          0x12      
 
 // BMI INT 레지스터
@@ -908,14 +908,14 @@ void SolicareDevice::run() {
               ESP_LOGW(TAG, "Battery read failed, storing voltage=0.0%%");
           }
 
-          float corrected_bpm = bpm;
-          if (strcmp(status, "ON") == 0) { // "ON" 상태일 때만 보정 적용
-              corrected_bpm -= 50.0f;
-              if (corrected_bpm < 0) corrected_bpm = 0;
-          }
+          //float corrected_bpm = bpm;
+          //if (strcmp(status, "ON") == 0) { // "ON" 상태일 때만 보정 적용
+          //    corrected_bpm -= 0.0f;
+          //    if (corrected_bpm < 0) corrected_bpm = 0;
+          //}
 
          
-          g_sensor_data.bpm = corrected_bpm;
+          g_sensor_data.bpm = bpm;
           strncpy(g_sensor_data.status, status, sizeof(g_sensor_data.status) - 1);
           g_sensor_data.timestamp_ms = t_ms;
 
@@ -925,3 +925,73 @@ void SolicareDevice::run() {
       };
 
 }
+//#include <cstring>
+//#include "esp_log.h"
+//#include "driver/i2c.h"
+//#include "freertos/FreeRTOS.h"
+//#include "freertos/task.h"
+//
+//// 프로젝트에서 쓰던 정의 재사용
+//#define I2C_NUM        I2C_NUM_0
+//#define SDA_PIN        18
+//#define SCL_PIN        20
+//#define I2C_FREQ       400000
+//#define I2C_TIMEOUT_MS 1000 
+//
+//static const char* TAG = "APP";
+//static const char* TAG_SCAN = "I2C_SCAN";
+//
+//static void i2c_master_init(void)
+//{
+//    i2c_config_t conf = {};
+//    conf.mode = I2C_MODE_MASTER;
+//    conf.sda_io_num = SDA_PIN;
+//    conf.scl_io_num = SCL_PIN;
+//    conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
+//    conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
+//#if ESP_IDF_VERSION_MAJOR >= 5
+//    conf.clk_flags = 0;
+//#endif
+//    conf.master.clk_speed = I2C_FREQ;
+//
+//    ESP_ERROR_CHECK(i2c_param_config(I2C_NUM, &conf));
+//    ESP_ERROR_CHECK(i2c_driver_install(I2C_NUM, conf.mode, 0, 0, 0));
+//    ESP_LOGI(TAG, "I2C init OK (SDA=%d, SCL=%d, F=%lu)", SDA_PIN, SCL_PIN, (unsigned long)I2C_FREQ);
+//}
+//
+//static void i2c_scan_bus(void)
+//{
+//    ESP_LOGI(TAG_SCAN, "Scanning I2C bus on port %d ...", I2C_NUM);
+//    int found = 0;
+//    for (uint8_t addr = 1; addr < 0x7F; ++addr) {
+//        i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+//        i2c_master_start(cmd);
+//        i2c_master_write_byte(cmd, (addr << 1) | I2C_MASTER_WRITE, true);
+//        i2c_master_stop(cmd);
+//        esp_err_t ret = i2c_master_cmd_begin(I2C_NUM, cmd, pdMS_TO_TICKS(50));
+//        i2c_cmd_link_delete(cmd);
+//
+//        if (ret == ESP_OK) {
+//            ESP_LOGI(TAG_SCAN, "Device @ 0x%02X", addr);
+//            found++;
+//        }
+//        else if (ret != ESP_FAIL) {
+//            ESP_LOGW(TAG_SCAN, "Error @ 0x%02X: %s", addr, esp_err_to_name(ret));
+//        }
+//        vTaskDelay(pdMS_TO_TICKS(2));
+//    }
+//    if (found == 0) ESP_LOGI(TAG_SCAN, "No I2C devices found");
+//    else ESP_LOGI(TAG_SCAN, "Scan complete: %d device(s)", found);
+//}
+//
+//// C++ 파일에선 반드시 C 링키지로 내보내기
+//extern "C" void app_main(void)
+//{
+//    ESP_LOGI(TAG, "==== Boot ====");
+//    i2c_master_init();
+//    i2c_scan_bus();
+//
+//    // 여기에 기존 센서 초기화/태스크 생성 코드 이어서 배치
+//    // ...
+//    while (true) vTaskDelay(pdMS_TO_TICKS(1000));
+//}
