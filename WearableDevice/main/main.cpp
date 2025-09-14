@@ -128,6 +128,30 @@ static esp_err_t bmi160_write_reg(uint8_t reg_addr, uint8_t data) {
 static esp_err_t bmi160_read_reg(uint8_t reg_addr, uint8_t* data, size_t len) {
     return i2c_master_write_read_device(I2C_NUM, BMI160_I2C_ADDR, &reg_addr, 1, data, len, pdMS_TO_TICKS(1000));
 }
+
+static esp_err_t bmi160_sleep_mode() {
+    esp_err_t ret;
+    ret = bmi160_write_reg(BMI160_REG_CMD, 0x12);
+    if (ret != ESP_OK) { ESP_LOGE(TAG, "ACC suspend failed"); return ret; }
+    vTaskDelay(pdMS_TO_TICKS(10));
+    ret = bmi160_write_reg(BMI160_REG_CMD, 0x17);
+    if (ret != ESP_OK) { ESP_LOGE(TAG, "GYR suspend failed"); return ret; }
+    vTaskDelay(pdMS_TO_TICKS(10));
+    return ESP_OK;
+
+}
+static esp_err_t bmi160_wakeup_mode() {
+    esp_err_t ret;  
+    ESP_LOGI(TAG, "Setting accelerometer to Normal mode...");
+    ret = bmi160_write_reg(BMI160_REG_CMD, BMI160_CMD_ACC_MODE_NORMAL);
+    if (ret != ESP_OK) { ESP_LOGE(TAG, "ACC normal failed"); return ret; }
+    vTaskDelay(pdMS_TO_TICKS(10));
+    ret = bmi160_write_reg(BMI160_REG_CMD, BMI160_CMD_GYR_MODE_NORMAL);
+    if (ret != ESP_OK) { ESP_LOGE(TAG, "GYR normal failed"); return ret; }
+    vTaskDelay(pdMS_TO_TICKS(80));  
+    return ESP_OK;
+}
+
 static esp_err_t bmi160_init() {
     uint8_t chip_id = 0;
     esp_err_t ret = bmi160_read_reg(BMI160_REG_CHIP_ID, &chip_id, 1);
@@ -177,15 +201,7 @@ static esp_err_t bmi160_init() {
     if (ret != ESP_OK) { ESP_LOGE(TAG, "Set Accel Normal mode command failed!"); return ESP_FAIL; }
     vTaskDelay(pdMS_TO_TICKS(250));
 
-    ESP_LOGI(TAG, "Setting accelerometer to Normal mode...");
-    ret = bmi160_write_reg(BMI160_REG_CMD, BMI160_CMD_ACC_MODE_NORMAL);
-    if (ret != ESP_OK) { ESP_LOGE(TAG, "Set Accel Normal mode command failed!"); return ESP_FAIL; }
-    vTaskDelay(pdMS_TO_TICKS(250));
-
-    ESP_LOGI(TAG, "Setting gyroscope to Normal mode...");
-    ret = bmi160_write_reg(BMI160_REG_CMD, BMI160_CMD_GYR_MODE_NORMAL);
-    if (ret != ESP_OK) { ESP_LOGE(TAG, "Set Gyro Normal mode command failed!"); return ESP_FAIL; }
-    vTaskDelay(pdMS_TO_TICKS(250));
+   
 
     // --- 상태 검증 로그 추가 ---
     uint8_t pmu_status = 0;
@@ -499,6 +515,7 @@ static void reset_filter_states(void) {
 
 
 static void process_sample(uint32_t ir_raw, float t_ms) {
+    static bool prev_worn = false;
   if (!worn) {
     if (ir_raw > IR_ON_THRESHOLD) {
       if (++on_cnt > STABLE_COUNT) {
@@ -526,6 +543,15 @@ static void process_sample(uint32_t ir_raw, float t_ms) {
       }
     } else {
       off_cnt = 0;
+    }
+    if (worn != prev_worn) {
+        if (worn) {
+            bmi160_wakeup_mode();  // 착용 시 센서 활성화
+        }
+        else {
+            bmi160_sleep_mode();   // 미착용 시 절전
+        }
+        prev_worn = worn;
     }
   }
 
@@ -815,6 +841,8 @@ extern "C" void app_main(void) {
   aht21b_check_and_init(); // 온습도 센서 초기화 추가
   battery_adc_init_once(); // 배터리 ADC 초기화
   bmi160_init();
+
+  
 
   // 4. MAX30102 센서 설정 및 인터럽트 시작 (기존 i2c_init() 호출은 제거됨)
   vTaskDelay(pdMS_TO_TICKS(10));
