@@ -46,7 +46,7 @@
 #define LED_STD 0x22
 #define MAX30102_INT_GPIO GPIO_NUM_8
 #define INT_PIN_SEL (1ULL << MAX30102_INT_GPIO)
-#define BURST_SZ 64
+#define BURST_SZ 8
 #define BYTES_PER_SAMPLE 3
 #define SR_HZ 100.0f
 #define MIN_BPM 40.0f
@@ -619,62 +619,32 @@ static void int_task(void* arg) {
         if (!xQueueReceive(s_int_queue, &io_num, portMAX_DELAY)) continue;
 
         switch (io_num) {
-        case MAX30102_INT_GPIO:
-        {
+        case MAX30102_INT_GPIO: {
+
             uint8_t int1 = 0, int2 = 0;
             if (read_regs(REG_INTR_STATUS_1, &int1, 1) != ESP_OK ||
                 read_regs(REG_INTR_STATUS_2, &int2, 1) != ESP_OK) {
                 ESP_LOGE(TAG, "INT_STATUS read fail");
                 continue;
             }
-
-            // PPG_RDY 인터럽트 처리 (새로 추가된 로직)
-            if (int1 & 0x40) {  // PPG_RDY 비트 체크
-                // 단일 샘플 읽기
-                uint8_t sample_data[3] = { 0 };
-                if (read_regs(REG_FIFO_DATA, sample_data, 3) == ESP_OK) {
-                    uint32_t ir_value = ((uint32_t)(sample_data[0] & 0x03) << 16) |
-                        ((uint32_t)sample_data[1] << 8) |
-                        sample_data[2];
-
-                    float tms = sample_idx * Ts_ms;
-                    process_sample(ir_value, tms);
+            int cnt = fifo_count_debug();
+            if (cnt <= 0) continue;
+            int left = cnt;
+            while (left > 0) {
+                int n = (left >= BURST_SZ) ? BURST_SZ : left;
+                if (fifo_read_n_ir(n, ir_buf) != ESP_OK) {
+                    ESP_LOGE(TAG, "fifo_read_n_ir fail");
+                    break;
+                }
+                for (int i = 0; i < n; i++) {
+                    float t_ms = (sample_idx * Ts_ms);
+                    process_sample(ir_buf[i], t_ms);
                     sample_idx++;
                 }
-                else {
-                    ESP_LOGE(TAG, "PPG sample read fail");
-                }
-                break;  // PPG_RDY 처리 후 바로 종료
+                left -= n;
             }
-
-            // A_FULL 인터럽트 처리 (기존 코드, 백업용)
-            if (int1 & 0x80) {
-                ESP_LOGW(TAG, "A_FULL triggered (backup mode)");
-
-                int cnt = fifo_count_debug();
-                if (cnt <= 0) continue;
-
-                int left = cnt;
-                while (left > 0) {
-                    int n = (left >= BURST_SZ) ? BURST_SZ : left;
-
-                    if (fifo_read_n_ir(n, ir_buf) != ESP_OK) {
-                        ESP_LOGE(TAG, "fifo_read_n_ir fail");
-                        break;
-                    }
-
-                    for (int i = 0; i < n; i++) {
-                        float tms = sample_idx * Ts_ms;
-                        process_sample(ir_buf[i], tms);
-                        sample_idx++;
-                    }
-
-                    left -= n;
-                }
-            }
+            break;
         }
-        break;
-        
 
         case BMI160_INT1_PIN: {
 
@@ -888,12 +858,12 @@ extern "C" void app_main(void) {
     fifo_reset();
     vTaskDelay(pdMS_TO_TICKS(5));
 
-    write_reg(REG_FIFO_CONF, 0x00);
+    write_reg(REG_FIFO_CONF, FIFO_CONF_INIT);
     write_reg(REG_SPO2, SPO2_STD);
     write_reg(REG_LED1, LED_STD);
     write_reg(REG_LED2, LED_STD);
     write_reg(REG_MODE, MODE_HEART);
-    write_reg(REG_INTR_ENABLE_1, 0x40);
+    write_reg(REG_INTR_ENABLE_1, 0x80);
     write_reg(REG_INTR_ENABLE_2, 0x00);
     vTaskDelay(pdMS_TO_TICKS(50));
 
@@ -911,7 +881,7 @@ extern "C" void app_main(void) {
     io_conf1.pull_up_en = GPIO_PULLUP_ENABLE;
     ESP_ERROR_CHECK(gpio_config(&io_conf1));
 
-    s_int_queue = xQueueCreate(64, sizeof(uint32_t));
+    s_int_queue = xQueueCreate(16, sizeof(uint32_t));
     xTaskCreate(int_task, "max30102_int_task", 4096, NULL, 10, NULL);
 
     gpio_install_isr_service(0);
